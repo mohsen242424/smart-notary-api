@@ -11,4 +11,4 @@ Pillow
 pydantic
 python-dotenv
 starlette
-mcp
+mcp[fastapi]
