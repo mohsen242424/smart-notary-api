@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+supabase
+jinja2
+weasyprint
+arabic-reshaper
+python-bidi
+python-dotenv
