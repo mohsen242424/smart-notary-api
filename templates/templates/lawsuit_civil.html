@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="text-align: center; text-decoration: underline;">لائحة دعوى صلحية حقوقية</h2>
+<h3 style="text-align: center;">لدى محكمة صلح حقوق <span class="variable">{{ court_name }}</span></h3>
+
+<table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+    <tr>
+        <td style="width: 50%; vertical-align: top;">
+            <strong>المدعي:</strong> <span class="variable">{{ plaintiff_name }}</span><br>
+            <strong>الرقم الوطني:</strong> <span class="national-id-box">{{ national_id }}</span><br>
+            <strong>العنوان:</strong> <span class="variable">{{ address }}</span>
+        </td>
+        <td style="width: 50%; vertical-align: top;">
+            <strong>المدعى عليه:</strong> <span class="variable">{{ defendant_name }}</span><br>
+            <strong>العنوان:</strong> <span class="variable">{{ defendant_address }}</span>
+        </td>
+    </tr>
+</table>
+
+<p><strong>موضوع الدعوى:</strong> <span class="variable">{{ subject }}</span></p>
+<p><strong>قيمة الدعوى:</strong> <span class="variable">{{ claim_value }}</span></p>
+
+<hr>
+<h4>وقائع الدعوى:</h4>
+<div style="white-space: pre-wrap;">{{ facts }}</div>
+
+<h4>الطلب:</h4>
+<ol>
+    <li>تبليغ المدعى عليه نسخة من لائحة الدعوى وموعد الجلسة.</li>
+    <li>غب المحاكمة والثبوت، الحكم للمدعي بالمبلغ المدعى به مع الرسوم والمصاريف.</li>
+</ol>
+{% endblock %}
