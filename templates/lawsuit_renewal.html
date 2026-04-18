@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="text-align: center; background-color: #f0f0f0; display: inline-block; padding: 5px 20px;">طلب تجديد دعوى</h2>
+
+<h3 style="text-align: center;">لدى محكمة <span class="variable">{{ court_name }}</span> الموقرة</h3>
+
+<p><strong>المستدعي:</strong> <span class="variable">{{ plaintiff_name }}</span></p>
+<p><strong>وكيله إن وجد:</strong> <span class="variable">{{ lawyer_name }}</span></p>
+
+<p><strong>الموضوع:</strong> طلب تجديد الدعوى الصلحية الحقوقية رقم <span class="variable">{{ case_number }}</span></p>
+
+<div style="margin-top: 20px; text-align: justify;">
+    <p>حيث تم إسقاط الدعوى رقم <span class="variable">{{ case_number }}</span> بتاريخ <span class="variable">{{ drop_date }}</span>، لذا ألتمس الإيعاز لمن يلزم بتجديد الدعوى أعلاه وتحديد موعد لرؤيتها والنظر بها من النقطة التي وصلت إليها.</p>
+</div>
+
+<p style="text-align: center; margin-top: 40px;">وتفضلوا بقبول فائق الاحترام</p>
+
+<div style="margin-top: 30px; float: right;">
+    <p>اسم المستدعي: <span class="variable">{{ plaintiff_name }}</span></p>
+    <p>التاريخ: {{ date }}</p>
+</div>
+<div style="clear: both;"></div>
+{% endblock %}
