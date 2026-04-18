@@ -52,22 +52,27 @@
         {% block content %}{% endblock %}
     </div>
 
-    {% if witnesses %}
-    <div class="witness-section">
-        <strong>شهود الإثبات:</strong>
-        <table class="witness-table">
-            <tr>
-                {% for witness in witnesses %}
-                <td style="width: 50%; vertical-align: top;">
-                    اسم الشاهد: <span class="variable">{{ witness.full_name }}</span><br>
-                    الرقم الوطني: <span class="variable">{{ witness.national_id }}</span><br>
-                    التوقيع: ...........................
-                </td>
-                {% endfor %}
-            </tr>
-        </table>
-    </div>
-    {% endif %}
+   {% if witnesses %}
+<div class="witness-section">
+    <strong>شهود الإثبات:</strong>
+    <table class="witness-table">
+        <tr>
+            {% for witness in witnesses %}
+            <td style="width: 50%; vertical-align: top;">
+                اسم الشاهد: <span class="variable">{{ witness.full_name }}</span><br>
+                الرقم الوطني: <span class="variable">{{ witness.national_id }}</span><br>
+                التوقيع: 
+                {% if witness.signature_url %}
+                    <img src="{{ witness.signature_url }}" style="width: 100px; height: auto; vertical-align: middle;">
+                {% else %}
+                    ...........................
+                {% endif %}
+            </td>
+            {% endfor %}
+        </tr>
+    </table>
+</div>
+{% endif %}
 
     <div class="footer">
         <p>تحريراً في تاريخ: {{ date }}</p>
