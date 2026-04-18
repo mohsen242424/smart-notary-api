@@ -8,3 +8,5 @@ python-bidi==0.4.2
 python-dotenv
 qrcode
 Pillow
+pydantic
+python-dotenv
