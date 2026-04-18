@@ -6,3 +6,5 @@ weasyprint
 arabic-reshaper
 python-bidi
 python-dotenv
+qrcode
+Pillow
