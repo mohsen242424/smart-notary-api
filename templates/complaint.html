@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="text-align: center;">لدى محكمة <span class="variable">{{ court_name }}</span> الموقرة</h2>
+
+<p><strong>اسم المشتكي:</strong> <span class="variable">{{ plaintiff_name }}</span></p>
+<p><strong>الرقم الوطني:</strong> <span class="national-id-box">{{ national_id }}</span></p>
+<p><strong>العنوان:</strong> <span class="variable">{{ address }}</span></p>
+<p><strong>اسم المشتكى عليه:</strong> <span class="variable">{{ defendant_name }}</span></p>
+
+<p><strong>الموضوع:</strong> <span class="variable">{{ subject }}</span></p>
+
+<hr>
+<h3>الوقائع:</h3>
+<div style="text-align: justify; white-space: pre-wrap;">
+{{ facts }}
+</div>
+
+<h3>الطلب:</h3>
+<p>{{ demands }}</p>
+
+<p style="text-align: center; margin-top: 30px;">وتفضلوا بقبول فائق الاحترام</p>
+{% endblock %}
