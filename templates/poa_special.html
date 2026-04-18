@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="text-align: center; text-decoration: underline;">وكالة خاصة</h2>
+
+<p>أنا الموقع أدناه <span class="variable">{{ user_name }}</span></p>
+<p>الرقم الوطني: <span class="national-id-box">{{ national_id }}</span></p>
+
+<p>قد وكلت وأقمت مقام نفسي وعوضاً عن ذاتي وشخصي السيد <span class="variable">{{ agent_name }}</span></p>
+<p>لينوب عني في: </p>
+<div style="border: 1px solid #eee; padding: 15px;">
+{{ poa_details }}
+</div>
+
+<p>وله الحق في التوقيع عني على كافة الأوراق والمعاملات المتعلقة بهذا الخصوص ومراجعة جميع الدوائر الرسمية ذات الاختصاص.</p>
+{% endblock %}
