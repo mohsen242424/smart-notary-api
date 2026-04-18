@@ -1,13 +1,7 @@
-
 fastapi
 uvicorn
-starlette
-sse-starlette
 python-dotenv
 pydantic
-
-mcp
-
 supabase
 jinja2
 weasyprint
