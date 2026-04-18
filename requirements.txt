@@ -12,3 +12,5 @@ pydantic
 python-dotenv
 starlette
 mcp[fastapi]
+python-dotenv
+sse-starlette
