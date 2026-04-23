@@ -7,3 +7,4 @@ jinja2==3.1.6
 weasyprint==62.3
 qrcode==8.1
 Pillow==11.2.1
+httpx==0.28.1
