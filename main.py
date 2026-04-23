@@ -16,8 +16,10 @@ app = FastAPI(title="Smart Notary Jordan API", version="2.0.0")
 API_KEY      = os.getenv("API_key")
 OPENAI_KEY   = os.getenv("OPENAI_API_KEY_HERE")
 WORKFLOW_ID  = os.getenv("WORKFLOW_ID", "wf_69e2fcba978481909bc85ec8878bf6f70ce899adef1c8af4")
+WORKFLOW_VER = os.getenv("WORKFLOW_VERSION", "2")  # رقم الإصدار المنشور
 
-OPENAI_RESPONSES_URL = "https://api.openai.com/v2/responses"
+# ✅ v1 وليس v2
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 DocType = Literal[
     "complaint", "lawsuit_civil", "lawsuit_renewal", "poa_special", "poa_irrevocable"
@@ -42,6 +44,7 @@ class NotaryRequest(BaseModel):
 class AgentMessageRequest(BaseModel):
     message: str
     workflow_id: Optional[str] = None
+    workflow_version: Optional[str] = None
     previous_response_id: Optional[str] = None
 
 
@@ -49,6 +52,7 @@ class AgentFunctionResultRequest(BaseModel):
     call_id: str
     result: str
     workflow_id: Optional[str] = None
+    workflow_version: Optional[str] = None
     previous_response_id: Optional[str] = None
 
 
@@ -64,6 +68,15 @@ def _openai_headers() -> Dict[str, str]:
     if not OPENAI_KEY:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured on server")
     return {"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}
+
+
+def _build_workflow(wf_id: Optional[str], wf_ver: Optional[str]) -> Dict:
+    """يبني كائن الـ workflow مع الإصدار الصحيح"""
+    wf: Dict[str, Any] = {"id": wf_id or WORKFLOW_ID}
+    ver = wf_ver or WORKFLOW_VER
+    if ver:
+        wf["version"] = ver
+    return wf
 
 
 def _parse_openai_response(data: Dict) -> Dict:
@@ -86,7 +99,11 @@ def _parse_openai_response(data: Dict) -> Dict:
                 "call_id": item.get("call_id") or item.get("id"),
                 "arguments": args,
             }
-    return {"text": text.strip(), "response_id": data.get("id", ""), "function_call": function_call}
+    return {
+        "text": text.strip(),
+        "response_id": data.get("id", ""),
+        "function_call": function_call,
+    }
 
 
 @app.get("/")
@@ -96,7 +113,11 @@ async def health_check():
 
 @app.get("/schema/{doc_type}")
 async def get_schema(doc_type: DocType, auth=Depends(verify_api_key)):
-    return {"doc_type": doc_type, "required_fields": REQUIRED_FIELDS.get(doc_type, []), "optional_fields": ["witnesses"]}
+    return {
+        "doc_type": doc_type,
+        "required_fields": REQUIRED_FIELDS.get(doc_type, []),
+        "optional_fields": ["witnesses"],
+    }
 
 
 @app.post("/agent/message")
@@ -105,16 +126,17 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
     payload: Dict[str, Any] = {
         "model": "gpt-4.1",
         "input": request.message,
-        "workflow": {"id": request.workflow_id or WORKFLOW_ID},
+        "workflow": _build_workflow(request.workflow_id, request.workflow_version),
         "store": True,
     }
     if request.previous_response_id:
         payload["previous_response_id"] = request.previous_response_id
+
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             res = await client.post(OPENAI_RESPONSES_URL, headers=_openai_headers(), json=payload)
         if res.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"OpenAI error {res.status_code}: {res.text[:300]}")
+            raise HTTPException(status_code=502, detail=f"OpenAI error {res.status_code}: {res.text[:400]}")
         return _parse_openai_response(res.json())
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="OpenAI request timed out")
@@ -126,20 +148,27 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 
 @app.post("/agent/function-result")
 async def agent_function_result(request: AgentFunctionResultRequest, auth=Depends(verify_api_key)):
-    """يرسل نتيجة الـ function للـ Agent ويستقبل رده"""
+    """يرسل نتيجة الـ function للـ Agent ويستقبل رده النهائي"""
     payload: Dict[str, Any] = {
         "model": "gpt-4.1",
-        "input": [{"type": "function_call_output", "call_id": request.call_id, "output": request.result}],
-        "workflow": {"id": request.workflow_id or WORKFLOW_ID},
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": request.call_id,
+                "output": request.result,
+            }
+        ],
+        "workflow": _build_workflow(request.workflow_id, request.workflow_version),
         "store": True,
     }
     if request.previous_response_id:
         payload["previous_response_id"] = request.previous_response_id
+
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             res = await client.post(OPENAI_RESPONSES_URL, headers=_openai_headers(), json=payload)
         if res.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"OpenAI error {res.status_code}: {res.text[:300]}")
+            raise HTTPException(status_code=502, detail=f"OpenAI error {res.status_code}: {res.text[:400]}")
         return _parse_openai_response(res.json())
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="OpenAI request timed out")
@@ -157,7 +186,10 @@ async def generate_pdf_endpoint(request: NotaryRequest, auth=Depends(verify_api_
     required = REQUIRED_FIELDS.get(request.doc_type, [])
     missing = [f for f in required if not request.data.get(f)]
     if missing:
-        raise HTTPException(status_code=422, detail=f"الحقول التالية مطلوبة وغير موجودة: {', '.join(missing)}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"الحقول التالية مطلوبة وغير موجودة: {', '.join(missing)}"
+        )
 
     facts_text = request.data.get("facts", "") + request.data.get("poa_details", "")
     if any(w in facts_text for w in ["بيع عقار", "وصية", "طلاق", "زواج"]):
@@ -179,10 +211,12 @@ async def generate_pdf_endpoint(request: NotaryRequest, auth=Depends(verify_api_
         generate_pdf(f"{request.doc_type}.html", template_data, tmp_path)
         pdf_url = upload_pdf_to_storage(tmp_path, f"{request.request_id}.pdf")
         return {
-            "status": "success", "request_id": request.request_id,
-            "doc_type": request.doc_type, "pdf_url": pdf_url,
+            "status": "success",
+            "request_id": request.request_id,
+            "doc_type": request.doc_type,
+            "pdf_url": pdf_url,
             "hash_fingerprint": sha256_hash,
-            "message": "تم توليد الوثيقة وتوثيقها رقمياً بنجاح."
+            "message": "تم توليد الوثيقة وتوثيقها رقمياً بنجاح.",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
