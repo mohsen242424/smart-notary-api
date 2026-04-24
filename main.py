@@ -471,6 +471,24 @@ async def approve_management_draft(
         doc_type = row.get("doc_type")
         collected_fields = row.get("collected_fields") or {}
 
+        # ✅ Fix 1: Validate doc_type before Pydantic parsing to avoid cryptic 500
+        valid_doc_types = list(REQUIRED_FIELDS.keys())
+        if not doc_type or doc_type not in valid_doc_types:
+            print(f"❌ approve error: invalid doc_type='{doc_type}' for draft {draft_id}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"نوع الوثيقة غير صحيح: '{doc_type}'. الأنواع المتاحة: {valid_doc_types}"
+            )
+
+        # ✅ Fix 2: Validate required fields before attempting PDF generation
+        missing = _validate_required_fields(doc_type, collected_fields)
+        if missing:
+            print(f"❌ approve error: missing fields {missing} for draft {draft_id}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"الحقول التالية مطلوبة وغير موجودة: {', '.join(missing)}"
+            )
+
         req = NotaryRequest(
             request_id=draft_id,
             doc_type=doc_type,
@@ -498,6 +516,10 @@ async def approve_management_draft(
     except HTTPException:
         raise
     except Exception as e:
+        # ✅ Fix 3: Log the exact error so it appears in Render logs
+        import traceback
+        print(f"❌ Unhandled approve error for draft {draft_id}:")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 
