@@ -13,15 +13,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Smart Notary Jordan API", version="2.2.0")
+app = FastAPI(title="Smart Notary Jordan API", version="2.2.1")
 
 # Support both naming styles to avoid config mismatch
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_HERE")
 WORKFLOW_ID = os.getenv("WORKFLOW_ID", "wf_69e2fcba978481909bc85ec8878bf6f70ce899adef1c8af4")
 WORKFLOW_VER = os.getenv("WORKFLOW_VERSION", "5")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+# مسار الدردشة القياسي (متوافق مع كل الوظائف)
+OPENAI_RESPONSES_URL = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/chat/completions")
 
 DocType = Literal[
     "complaint", "lawsuit_civil", "lawsuit_renewal", "poa_special", "poa_irrevocable"
@@ -101,13 +103,19 @@ def _openai_headers() -> Dict[str, str]:
 
 
 def _db():
-    # Lazy import to avoid startup crash if env is missing
     from supabase_client import _get_client
     return _get_client()
 
 
 def _extract_openai_text(data: Dict[str, Any]) -> str:
     parts: List[str] = []
+    
+    # دعم تنسيق OpenAI القياسي
+    if "choices" in data and len(data["choices"]) > 0:
+        msg = data["choices"][0].get("message", {})
+        return msg.get("content", "").strip()
+        
+    # دعم التنسيق القديم 
     for item in data.get("output", []):
         if item.get("type") == "message":
             for c in item.get("content", []):
@@ -120,24 +128,44 @@ def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
     text = ""
     function_call = None
 
-    for item in data.get("output", []):
-        item_type = item.get("type")
+    # 1. التحقق من تنسيق OpenAI القياسي (متوافق مع الأداة)
+    if "choices" in data and len(data["choices"]) > 0:
+        msg = data["choices"][0].get("message", {})
+        text += msg.get("content") or ""
+        
+        tool_calls = msg.get("tool_calls", [])
+        if tool_calls:
+            tc = tool_calls[0]
+            if tc.get("type") == "function":
+                raw_args = tc["function"].get("arguments", "{}")
+                if isinstance(raw_args, dict):
+                    raw_args = json.dumps(raw_args, ensure_ascii=False)
+                function_call = {
+                    "name": tc["function"].get("name"),
+                    "call_id": tc.get("id"),
+                    "arguments": raw_args,
+                }
 
-        if item_type == "message":
-            for c in item.get("content", []):
-                if c.get("type") == "output_text":
-                    text += c.get("text", "")
+    # 2. التحقق من التنسيق المخصص لتجنب الأخطاء الفارغة
+    elif "output" in data:
+        for item in data.get("output", []):
+            item_type = item.get("type")
 
-        elif item_type == "function_call":
-            raw_args = item.get("arguments", "{}")
-            if isinstance(raw_args, dict):
-                raw_args = json.dumps(raw_args, ensure_ascii=False)
+            if item_type == "message":
+                for c in item.get("content", []):
+                    if c.get("type") == "output_text":
+                        text += c.get("text", "")
 
-            function_call = {
-                "name": item.get("name"),
-                "call_id": item.get("call_id") or item.get("id"),
-                "arguments": raw_args,
-            }
+            elif item_type == "function_call":
+                raw_args = item.get("arguments", "{}")
+                if isinstance(raw_args, dict):
+                    raw_args = json.dumps(raw_args, ensure_ascii=False)
+
+                function_call = {
+                    "name": item.get("name"),
+                    "call_id": item.get("call_id") or item.get("id"),
+                    "arguments": raw_args,
+                }
 
     payload: Dict[str, Any] = {
         "id": data.get("id", ""),
@@ -146,8 +174,6 @@ def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
         "function_call": function_call,
     }
 
-    # Optional structured pass-through if model returns JSON text
-    # e.g. {"next_question":"...", "draft_ready":true, ...}
     raw_text = payload["text"]
     if isinstance(raw_text, str) and raw_text.startswith("{") and raw_text.endswith("}"):
         try:
@@ -233,7 +259,7 @@ def _generate_pdf_internal(request: NotaryRequest) -> Dict[str, Any]:
 async def health_check():
     return {
         "status": "Online",
-        "version": "2.2.0",
+        "version": "2.2.1",
         "law_compliance": "Jordan Notary Law 2026",
         "workflow_id": WORKFLOW_ID,
         "workflow_version": WORKFLOW_VER,
@@ -251,15 +277,50 @@ async def get_schema(doc_type: DocType, auth=Depends(verify_api_key)):
 
 @app.post("/agent/message")
 async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_key)):
-    """
-    Receives workflow_id/workflow_version for compatibility with Flutter.
-    Does NOT forward `workflow` object to OpenAI responses API.
-    """
+    # دمج الأداة والتعليمات مباشرة في الطلب لإجبار الذكاء الاصطناعي على جمع البيانات
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_notary_document",
+                "description": "Generate a Jordanian legal notary document only after collecting all required fields.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "doc_type": {
+                            "type": "string",
+                            "enum": ["complaint", "lawsuit_civil", "lawsuit_renewal", "poa_special", "poa_irrevocable"]
+                        },
+                        "data": {
+                            "type": "object",
+                            "description": "All collected fields for the document"
+                        },
+                        "witnesses": {
+                            "type": "array",
+                            "items": {"type": "object"}
+                        }
+                    },
+                    "required": ["doc_type", "data", "witnesses"]
+                }
+            }
+        }
+    ]
+
     payload: Dict[str, Any] = {
         "model": OPENAI_MODEL,
-        "input": request.message,
-        "store": True,
-        "tool_choice": "auto"  # الأهم: إجبار الذكاء الاصطناعي على استخدام الوظائف إذا لزم الأمر
+        "messages": [
+            {
+                "role": "system",
+                "content": "أنت مساعد قانوني أردني. مهمتك الوحيدة هي جمع البيانات من المستخدم سؤالاً بسؤال. ممنوع كتابة أي قالب جاهز. فقط اسأل عن الحقول المطلوبة بالترتيب، وبمجرد اكتمالها قم باستدعاء الأداة generate_notary_document."
+            },
+            {
+                "role": "user",
+                "content": request.message
+            }
+        ],
+        "tools": tools,
+        "tool_choice": "auto",
+        "store": True, 
     }
 
     if request.previous_response_id:
@@ -274,10 +335,13 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
             )
 
         if res.status_code != 200:
+            print(f"RAW API ERROR: {res.text}")
             raise HTTPException(
                 status_code=502,
                 detail=f"OpenAI error {res.status_code}: {res.text[:500]}"
             )
+            
+        print(f"RAW API RESPONSE: {res.json()}")
 
         return _parse_openai_response(res.json())
 
@@ -291,13 +355,14 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 
 @app.post("/agent/function-result")
 async def agent_function_result(request: AgentFunctionResultRequest, auth=Depends(verify_api_key)):
+    
     payload: Dict[str, Any] = {
         "model": OPENAI_MODEL,
-        "input": [
+        "messages": [
             {
-                "type": "function_call_output",
-                "call_id": request.call_id,
-                "output": request.result,
+                "role": "tool",
+                "tool_call_id": request.call_id,
+                "content": request.result,
             }
         ],
         "store": True,
@@ -349,10 +414,6 @@ async def create_management_draft(
     request: ManagementDraftCreateRequest,
     auth=Depends(verify_api_key),
 ):
-    """
-    Creates/accepts a draft payload and returns a canonical draft id.
-    App will upsert to Supabase with user_id on mobile side.
-    """
     draft_id = str(uuid.uuid4())
     return {
         "id": draft_id,
@@ -370,9 +431,6 @@ async def approve_management_draft(
     draft_id: str,
     auth=Depends(verify_api_key),
 ):
-    """
-    Reads draft data from Supabase notary_documents by id, then generates PDF.
-    """
     try:
         db = _db()
         row_res = db.table("notary_documents") \
@@ -397,7 +455,6 @@ async def approve_management_draft(
 
         result = _generate_pdf_internal(req)
 
-        # Update final status in DB
         db.table("notary_documents").update({
             "status": "pdf_ready" if result.get("status") == "success" else "rejected",
             "pdf_url": result.get("pdf_url"),
@@ -425,10 +482,6 @@ async def revise_management_draft(
     request: ManagementDraftRevisionRequest,
     auth=Depends(verify_api_key),
 ):
-    """
-    Rewrites legal text from scratch based on revision note,
-    updates draft status to revision_requested.
-    """
     try:
         db = _db()
         row_res = db.table("notary_documents") \
@@ -465,7 +518,9 @@ async def revise_management_draft(
 
         payload = {
             "model": OPENAI_MODEL,
-            "input": prompt,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
             "store": False,
         }
 
