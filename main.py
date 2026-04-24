@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Smart Notary Jordan API", version="2.2.3")
+app = FastAPI(title="Smart Notary Jordan API", version="2.2.4")
 
 # Support both naming styles to avoid config mismatch
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
@@ -194,7 +194,6 @@ def _clean_orphan_tool_calls(history: List[Dict[str, Any]]) -> List[Dict[str, An
                 if tc.get("id") not in answered_ids
             ]
             if unanswered:
-                print(f"⚠️ حذف assistant message بـ {len(unanswered)} tool_call(s) بدون رد")
                 continue
         result.append(msg)
     return result
@@ -261,7 +260,7 @@ def _generate_pdf_internal(request: NotaryRequest) -> Dict[str, Any]:
 async def health_check():
     return {
         "status": "Online",
-        "version": "2.2.3",
+        "version": "2.2.4",
     }
 
 @app.get("/schema/{doc_type}")
@@ -313,7 +312,7 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 1. رحب بالمستخدم واسأله عن نوع الوثيقة التي يحتاجها.
 2. بعد أن يحدد النوع، ابدأ بسؤاله عن الحقول المطلوبة الخاصة بتلك الوثيقة من القائمة أعلاه (سؤال واحد في كل مرة).
 3. بمجرد أن تجمع **جميع الحقول** للوثيقة المطلوبة، توقف فوراً عن الأسئلة، واستدعِ الأداة `generate_notary_document` ممرراً لها البيانات.
-4. عندما تستقبل نتيجة الأداة بنجاح، أعطِ المستخدم الرابط النهائي للـ PDF بصيغة ودية.
+4. عندما تستقبل نتيجة الأداة بنجاح، أعطِ المستخدم الرابط النهائي بصيغة ودية.
 """
 
     system_msg = {
@@ -325,8 +324,6 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
     if request.previous_response_id:
         if request.previous_response_id in CONVERSATION_HISTORY:
             history = list(CONVERSATION_HISTORY[request.previous_response_id])
-        else:
-            print(f"⚠️ تحذير: الذاكرة مفقودة للمعرف {request.previous_response_id}.")
 
     history = _clean_orphan_tool_calls(history)
     history.append({"role": "user", "content": request.message})
@@ -340,7 +337,6 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 
     try:
         async with httpx.AsyncClient(timeout=90) as client:
-            # الطلب الأول للذكاء الاصطناعي
             res = await client.post(
                 OPENAI_RESPONSES_URL,
                 headers=_openai_headers(),
@@ -348,11 +344,7 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
             )
 
             if res.status_code != 200:
-                print(f"RAW API ERROR: {res.text}")
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"OpenAI error {res.status_code}: {res.text[:500]}"
-                )
+                raise HTTPException(status_code=502, detail=f"OpenAI error: {res.text[:500]}")
                 
             data = res.json()
             
@@ -360,35 +352,36 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
                 assistant_msg = data["choices"][0].get("message", {})
                 history.append(assistant_msg)
                 
-                # فحص هل الذكاء الاصطناعي طلب تنفيذ الأداة؟
                 tool_calls = assistant_msg.get("tool_calls", [])
                 if tool_calls:
                     for tc in tool_calls:
-                        if tc.get("type") == "function" and tc["function"]["name"] == "generate_notary_document":
-                            try:
-                                raw_args = tc["function"].get("arguments", "{}")
-                                args = json.loads(raw_args)
-                                
-                                # إنشاء الـ PDF فوراً داخل السيرفر
-                                req_doc = NotaryRequest(
-                                    request_id=str(uuid.uuid4()),
-                                    doc_type=args.get("doc_type"),
-                                    data=args.get("data", {}),
-                                    witnesses=args.get("witnesses", [])
-                                )
-                                pdf_result = _generate_pdf_internal(req_doc)
-                                result_str = json.dumps(pdf_result, ensure_ascii=False)
-                            except Exception as e:
-                                result_str = json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
-                            
-                            # إضافة النتيجة إلى الذاكرة وإخبار المساعد
-                            history.append({
-                                "role": "tool",
-                                "tool_call_id": tc["id"],
-                                "content": result_str
-                            })
+                        result_str = "{}"
+                        if tc.get("type") == "function":
+                            if tc["function"]["name"] == "generate_notary_document":
+                                try:
+                                    raw_args = tc["function"].get("arguments", "{}")
+                                    args = json.loads(raw_args)
+                                    
+                                    req_doc = NotaryRequest(
+                                        request_id=str(uuid.uuid4()),
+                                        doc_type=args.get("doc_type"),
+                                        data=args.get("data", {}),
+                                        witnesses=args.get("witnesses", [])
+                                    )
+                                    pdf_result = _generate_pdf_internal(req_doc)
+                                    result_str = json.dumps(pdf_result, ensure_ascii=False)
+                                except Exception as e:
+                                    result_str = json.dumps({"status": "error", "message": f"حدث خطأ أثناء التوليد: {str(e)}"}, ensure_ascii=False)
+                            else:
+                                result_str = json.dumps({"status": "error", "message": "أداة غير معروفة، يرجى التوقف وطلب البيانات المطلوبة فقط."}, ensure_ascii=False)
+                        
+                        # ضمان إرسال رد الأداة لمنع خطأ 502 من أوبن أيه آي
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result_str
+                        })
                     
-                    # إرسال النتيجة للمساعد مرة أخرى ليصيغ الرد النهائي للمستخدم
                     payload["messages"] = [system_msg] + history
                     payload.pop("tool_choice", None)
                     
@@ -414,22 +407,15 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="OpenAI request timed out")
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/agent/function-result")
 async def agent_function_result(request: AgentFunctionResultRequest, auth=Depends(verify_api_key)):
-    # هذا المسار بقي موجوداً في حال تم استخدامه من التطبيق مستقبلاً،
-    # ولكن الاعتماد عليه في توليد PDF لم يعد ضرورياً بفضل التعديل أعلاه.
     history = []
     if request.previous_response_id:
         if request.previous_response_id in CONVERSATION_HISTORY:
             history = list(CONVERSATION_HISTORY[request.previous_response_id])
-        else:
-            print(f"⚠️ تحذير: الذاكرة مفقودة للمعرف {request.previous_response_id} في الـ Function.")
 
     history.append({
         "role": "tool",
@@ -536,7 +522,6 @@ async def approve_management_draft(
 
         valid_doc_types = list(REQUIRED_FIELDS.keys())
         if not doc_type or doc_type not in valid_doc_types:
-            print(f"❌ approve error: invalid doc_type='{doc_type}' for draft {draft_id}")
             raise HTTPException(
                 status_code=422,
                 detail=f"نوع الوثيقة غير صحيح: '{doc_type}'. الأنواع المتاحة: {valid_doc_types}"
@@ -544,7 +529,6 @@ async def approve_management_draft(
 
         missing = _validate_required_fields(doc_type, collected_fields)
         if missing:
-            print(f"❌ approve error: missing fields {missing} for draft {draft_id}")
             raise HTTPException(
                 status_code=422,
                 detail=f"الحقول التالية مطلوبة وغير موجودة: {', '.join(missing)}"
