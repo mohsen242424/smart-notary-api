@@ -19,7 +19,7 @@ app = FastAPI(title="Smart Notary Jordan API", version="2.2.4")
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_HERE")
 WORKFLOW_ID = os.getenv("WORKFLOW_ID", "wf_69e2fcba978481909bc85ec8878bf6f70ce899adef1c8af4")
-WORKFLOW_VER = os.getenv("WORKFLOW_VERSION", "5")
+WORKFLOW_VER = os.getenv("WORKFLOW_VERSION", "9")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 # مسار الدردشة القياسي 
