@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Smart Notary Jordan API", version="2.2.1")
+app = FastAPI(title="Smart Notary Jordan API", version="2.2.3")
 
 # Support both naming styles to avoid config mismatch
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
@@ -22,7 +22,7 @@ WORKFLOW_ID = os.getenv("WORKFLOW_ID", "wf_69e2fcba978481909bc85ec8878bf6f70ce89
 WORKFLOW_VER = os.getenv("WORKFLOW_VERSION", "5")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
-# مسار الدردشة القياسي (متوافق مع كل الوظائف)
+# مسار الدردشة القياسي 
 OPENAI_RESPONSES_URL = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/chat/completions")
 
 DocType = Literal[
@@ -46,6 +46,10 @@ REQUIRED_FIELDS: Dict[str, List[str]] = {
     ],
 }
 
+# ==========================================
+# ذاكرة السيرفر لحفظ سياق المحادثات
+CONVERSATION_HISTORY: Dict[str, List[Dict[str, Any]]] = {}
+# ==========================================
 
 class NotaryRequest(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -53,13 +57,11 @@ class NotaryRequest(BaseModel):
     data: Dict[str, Any] = Field(...)
     witnesses: Optional[List[Dict[str, str]]] = Field(default_factory=list)
 
-
 class AgentMessageRequest(BaseModel):
     message: str
     workflow_id: Optional[str] = None
     workflow_version: Optional[str] = None
     previous_response_id: Optional[str] = None
-
 
 class AgentFunctionResultRequest(BaseModel):
     call_id: str
@@ -68,7 +70,6 @@ class AgentFunctionResultRequest(BaseModel):
     workflow_version: Optional[str] = None
     previous_response_id: Optional[str] = None
 
-
 class ManagementDraftCreateRequest(BaseModel):
     doc_type: DocType
     required_fields: List[str] = Field(default_factory=list)
@@ -76,10 +77,8 @@ class ManagementDraftCreateRequest(BaseModel):
     legal_text: str = ""
     status: str = "pending_review"
 
-
 class ManagementDraftRevisionRequest(BaseModel):
     revision_note: str
-
 
 # ---------------------------
 # Helpers
@@ -92,7 +91,6 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Unauthorized Access")
     return authorization
 
-
 def _openai_headers() -> Dict[str, str]:
     if not OPENAI_KEY:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured on server")
@@ -101,21 +99,16 @@ def _openai_headers() -> Dict[str, str]:
         "Content-Type": "application/json",
     }
 
-
 def _db():
     from supabase_client import _get_client
     return _get_client()
 
-
 def _extract_openai_text(data: Dict[str, Any]) -> str:
     parts: List[str] = []
-    
-    # دعم تنسيق OpenAI القياسي
     if "choices" in data and len(data["choices"]) > 0:
         msg = data["choices"][0].get("message", {})
         return msg.get("content", "").strip()
         
-    # دعم التنسيق القديم 
     for item in data.get("output", []):
         if item.get("type") == "message":
             for c in item.get("content", []):
@@ -123,12 +116,10 @@ def _extract_openai_text(data: Dict[str, Any]) -> str:
                     parts.append(c.get("text", ""))
     return "".join(parts).strip()
 
-
 def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
     text = ""
     function_call = None
 
-    # 1. التحقق من تنسيق OpenAI القياسي (متوافق مع الأداة)
     if "choices" in data and len(data["choices"]) > 0:
         msg = data["choices"][0].get("message", {})
         text += msg.get("content") or ""
@@ -146,7 +137,6 @@ def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
                     "arguments": raw_args,
                 }
 
-    # 2. التحقق من التنسيق المخصص لتجنب الأخطاء الفارغة
     elif "output" in data:
         for item in data.get("output", []):
             item_type = item.get("type")
@@ -179,15 +169,7 @@ def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
         try:
             parsed = json.loads(raw_text)
             if isinstance(parsed, dict):
-                for k in [
-                    "next_question",
-                    "draft_ready",
-                    "doc_type",
-                    "required_fields",
-                    "collected_fields",
-                    "legal_text",
-                    "text",
-                ]:
+                for k in ["next_question", "draft_ready", "doc_type", "required_fields", "collected_fields", "legal_text", "text"]:
                     if k in parsed:
                         payload[k] = parsed[k]
         except Exception:
@@ -195,11 +177,38 @@ def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
 
     return payload
 
+def _clean_orphan_tool_calls(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    ✅ Fix: يحذف أي assistant message عنده tool_calls بدون tool result بعده
+    هذا يحل خطأ: tool_calls must be followed by tool messages
+    """
+    if not history:
+        return history
+    cleaned = list(history)
+    # اجمع كل tool_call_ids اللي وُجدت في رسائل الـ tool
+    answered_ids = {
+        msg.get("tool_call_id")
+        for msg in cleaned
+        if msg.get("role") == "tool"
+    }
+    # احذف أي assistant message عنده tool_calls غير مجابة
+    result = []
+    for msg in cleaned:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            unanswered = [
+                tc for tc in msg["tool_calls"]
+                if tc.get("id") not in answered_ids
+            ]
+            if unanswered:
+                print(f"⚠️ حذف assistant message بـ {len(unanswered)} tool_call(s) بدون رد")
+                continue  # تخطى هاي الرسالة
+        result.append(msg)
+    return result
+
 
 def _validate_required_fields(doc_type: str, data: Dict[str, Any]) -> List[str]:
     required = REQUIRED_FIELDS.get(doc_type, [])
     return [f for f in required if not data.get(f)]
-
 
 def _generate_pdf_internal(request: NotaryRequest) -> Dict[str, Any]:
     from utils.pdf_generator import generate_pdf
@@ -259,12 +268,8 @@ def _generate_pdf_internal(request: NotaryRequest) -> Dict[str, Any]:
 async def health_check():
     return {
         "status": "Online",
-        "version": "2.2.1",
-        "law_compliance": "Jordan Notary Law 2026",
-        "workflow_id": WORKFLOW_ID,
-        "workflow_version": WORKFLOW_VER,
+        "version": "2.2.3",
     }
-
 
 @app.get("/schema/{doc_type}")
 async def get_schema(doc_type: DocType, auth=Depends(verify_api_key)):
@@ -274,10 +279,8 @@ async def get_schema(doc_type: DocType, auth=Depends(verify_api_key)):
         "optional_fields": ["witnesses"],
     }
 
-
 @app.post("/agent/message")
 async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_key)):
-    # دمج الأداة والتعليمات مباشرة في الطلب لإجبار الذكاء الاصطناعي على جمع البيانات
     tools = [
         {
             "type": "function",
@@ -306,25 +309,46 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
         }
     ]
 
-    payload: Dict[str, Any] = {
-        "model": OPENAI_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": "أنت مساعد قانوني أردني. مهمتك الوحيدة هي جمع البيانات من المستخدم سؤالاً بسؤال. ممنوع كتابة أي قالب جاهز. فقط اسأل عن الحقول المطلوبة بالترتيب، وبمجرد اكتمالها قم باستدعاء الأداة generate_notary_document."
-            },
-            {
-                "role": "user",
-                "content": request.message
-            }
-        ],
-        "tools": tools,
-        "tool_choice": "auto",
-        "store": True, 
+    # === التعديل الجذري هنا: زرعنا الحقول المطلوبة داخل ذاكرة المساعد عشان ما ينسى أو يهلوس ===
+    prompt_instructions = "أنت مساعد قانوني أردني. مهمتك هي جمع البيانات من المستخدم لإنشاء مسودة قانونية.\n"
+    prompt_instructions += "ممنوع كتابة أي قالب جاهز. اسأل سؤالاً واحداً فقط في كل رسالة، وتحدث بلهجة أردنية لطيفة.\n\n"
+    prompt_instructions += "الوثائق المتاحة والحقول المطلوبة لكل منها بالترتيب:\n"
+    for doc, fields in REQUIRED_FIELDS.items():
+        prompt_instructions += f"- {doc}: {', '.join(fields)}\n"
+    
+    prompt_instructions += """
+الخطوات التي يجب عليك اتباعها بدقة:
+1. رحب بالمستخدم واسأله عن نوع الوثيقة التي يحتاجها.
+2. بعد أن يحدد النوع، ابدأ بسؤاله عن الحقول المطلوبة الخاصة بتلك الوثيقة من القائمة أعلاه (سؤال واحد في كل مرة).
+3. بمجرد أن تجمع **جميع الحقول** للوثيقة المطلوبة، توقف فوراً عن الأسئلة، واستدعِ الأداة `generate_notary_document` ممرراً لها البيانات.
+"""
+
+    system_msg = {
+        "role": "system",
+        "content": prompt_instructions
     }
 
+    # استرجاع الذاكرة إذا كانت موجودة
+    history = []
     if request.previous_response_id:
-        payload["previous_response_id"] = request.previous_response_id
+        if request.previous_response_id in CONVERSATION_HISTORY:
+            history = list(CONVERSATION_HISTORY[request.previous_response_id])
+        else:
+            print(f"⚠️ تحذير: الذاكرة مفقودة للمعرف {request.previous_response_id}. (قد يكون السيرفر قد أعاد التشغيل)")
+
+    # ✅ Fix: تنظيف أي tool_calls بدون رد قبل إضافة رسالة المستخدم
+    # يحل خطأ: "tool_calls must be followed by tool messages"
+    history = _clean_orphan_tool_calls(history)
+
+    # إضافة رسالة المستخدم الجديدة للذاكرة
+    history.append({"role": "user", "content": request.message})
+
+    payload: Dict[str, Any] = {
+        "model": OPENAI_MODEL,
+        "messages": [system_msg] + history,
+        "tools": tools,
+        "tool_choice": "auto",
+    }
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -341,9 +365,22 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
                 detail=f"OpenAI error {res.status_code}: {res.text[:500]}"
             )
             
-        print(f"RAW API RESPONSE: {res.json()}")
+        data = res.json()
+        
+        # حفظ الرد الجديد في الذاكرة لتذكره في المرة القادمة
+        if "choices" in data and len(data["choices"]) > 0:
+            assistant_msg = data["choices"][0].get("message", {})
+            history.append(assistant_msg)
+            
+        new_response_id = str(uuid.uuid4())
+        CONVERSATION_HISTORY[new_response_id] = history
 
-        return _parse_openai_response(res.json())
+        # تمرير الرد للتطبيق مع الآي دي الجديد
+        parsed_response = _parse_openai_response(data)
+        parsed_response["id"] = new_response_id
+        parsed_response["response_id"] = new_response_id
+        
+        return parsed_response
 
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="OpenAI request timed out")
@@ -356,20 +393,28 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 @app.post("/agent/function-result")
 async def agent_function_result(request: AgentFunctionResultRequest, auth=Depends(verify_api_key)):
     
-    payload: Dict[str, Any] = {
-        "model": OPENAI_MODEL,
-        "messages": [
-            {
-                "role": "tool",
-                "tool_call_id": request.call_id,
-                "content": request.result,
-            }
-        ],
-        "store": True,
+    history = []
+    if request.previous_response_id:
+        if request.previous_response_id in CONVERSATION_HISTORY:
+            history = list(CONVERSATION_HISTORY[request.previous_response_id])
+        else:
+            print(f"⚠️ تحذير: الذاكرة مفقودة للمعرف {request.previous_response_id} في الـ Function.")
+
+    history.append({
+        "role": "tool",
+        "tool_call_id": request.call_id,
+        "content": request.result,
+    })
+
+    system_msg = {
+        "role": "system",
+        "content": "أنت مساعد قانوني أردني."
     }
 
-    if request.previous_response_id:
-        payload["previous_response_id"] = request.previous_response_id
+    payload: Dict[str, Any] = {
+        "model": OPENAI_MODEL,
+        "messages": [system_msg] + history,
+    }
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -385,7 +430,19 @@ async def agent_function_result(request: AgentFunctionResultRequest, auth=Depend
                 detail=f"OpenAI error {res.status_code}: {res.text[:500]}"
             )
 
-        return _parse_openai_response(res.json())
+        data = res.json()
+        if "choices" in data and len(data["choices"]) > 0:
+            assistant_msg = data["choices"][0].get("message", {})
+            history.append(assistant_msg)
+            
+        new_response_id = str(uuid.uuid4())
+        CONVERSATION_HISTORY[new_response_id] = history
+
+        parsed_response = _parse_openai_response(data)
+        parsed_response["id"] = new_response_id
+        parsed_response["response_id"] = new_response_id
+        
+        return parsed_response
 
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="OpenAI request timed out")
@@ -446,6 +503,24 @@ async def approve_management_draft(
         doc_type = row.get("doc_type")
         collected_fields = row.get("collected_fields") or {}
 
+        # ✅ Fix 1: Validate doc_type before Pydantic parsing to avoid cryptic 500
+        valid_doc_types = list(REQUIRED_FIELDS.keys())
+        if not doc_type or doc_type not in valid_doc_types:
+            print(f"❌ approve error: invalid doc_type='{doc_type}' for draft {draft_id}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"نوع الوثيقة غير صحيح: '{doc_type}'. الأنواع المتاحة: {valid_doc_types}"
+            )
+
+        # ✅ Fix 2: Validate required fields before attempting PDF generation
+        missing = _validate_required_fields(doc_type, collected_fields)
+        if missing:
+            print(f"❌ approve error: missing fields {missing} for draft {draft_id}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"الحقول التالية مطلوبة وغير موجودة: {', '.join(missing)}"
+            )
+
         req = NotaryRequest(
             request_id=draft_id,
             doc_type=doc_type,
@@ -473,6 +548,10 @@ async def approve_management_draft(
     except HTTPException:
         raise
     except Exception as e:
+        # ✅ Fix 3: Log the exact error so it appears in Render logs
+        import traceback
+        print(f"❌ Unhandled approve error for draft {draft_id}:")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 
