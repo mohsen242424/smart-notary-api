@@ -259,6 +259,7 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
         "model": OPENAI_MODEL,
         "input": request.message,
         "store": True,
+        "tool_choice": "auto"  # الأهم: إجبار الذكاء الاصطناعي على استخدام الوظائف إذا لزم الأمر
     }
 
     if request.previous_response_id:
