@@ -177,6 +177,35 @@ def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
 
     return payload
 
+def _clean_orphan_tool_calls(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    ✅ Fix: يحذف أي assistant message عنده tool_calls بدون tool result بعده
+    هذا يحل خطأ: tool_calls must be followed by tool messages
+    """
+    if not history:
+        return history
+    cleaned = list(history)
+    # اجمع كل tool_call_ids اللي وُجدت في رسائل الـ tool
+    answered_ids = {
+        msg.get("tool_call_id")
+        for msg in cleaned
+        if msg.get("role") == "tool"
+    }
+    # احذف أي assistant message عنده tool_calls غير مجابة
+    result = []
+    for msg in cleaned:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            unanswered = [
+                tc for tc in msg["tool_calls"]
+                if tc.get("id") not in answered_ids
+            ]
+            if unanswered:
+                print(f"⚠️ حذف assistant message بـ {len(unanswered)} tool_call(s) بدون رد")
+                continue  # تخطى هاي الرسالة
+        result.append(msg)
+    return result
+
+
 def _validate_required_fields(doc_type: str, data: Dict[str, Any]) -> List[str]:
     required = REQUIRED_FIELDS.get(doc_type, [])
     return [f for f in required if not data.get(f)]
@@ -305,8 +334,11 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
         if request.previous_response_id in CONVERSATION_HISTORY:
             history = list(CONVERSATION_HISTORY[request.previous_response_id])
         else:
-            # هذا التحذير بيظهر بسجلات Render إذا انمسحت الذاكرة بسبب إعادة تشغيل السيرفر
             print(f"⚠️ تحذير: الذاكرة مفقودة للمعرف {request.previous_response_id}. (قد يكون السيرفر قد أعاد التشغيل)")
+
+    # ✅ Fix: تنظيف أي tool_calls بدون رد قبل إضافة رسالة المستخدم
+    # يحل خطأ: "tool_calls must be followed by tool messages"
+    history = _clean_orphan_tool_calls(history)
 
     # إضافة رسالة المستخدم الجديدة للذاكرة
     history.append({"role": "user", "content": request.message})
