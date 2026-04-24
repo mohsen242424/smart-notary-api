@@ -178,20 +178,14 @@ def _parse_openai_response(data: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 def _clean_orphan_tool_calls(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    ✅ Fix: يحذف أي assistant message عنده tool_calls بدون tool result بعده
-    هذا يحل خطأ: tool_calls must be followed by tool messages
-    """
     if not history:
         return history
     cleaned = list(history)
-    # اجمع كل tool_call_ids اللي وُجدت في رسائل الـ tool
     answered_ids = {
         msg.get("tool_call_id")
         for msg in cleaned
         if msg.get("role") == "tool"
     }
-    # احذف أي assistant message عنده tool_calls غير مجابة
     result = []
     for msg in cleaned:
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
@@ -201,10 +195,9 @@ def _clean_orphan_tool_calls(history: List[Dict[str, Any]]) -> List[Dict[str, An
             ]
             if unanswered:
                 print(f"⚠️ حذف assistant message بـ {len(unanswered)} tool_call(s) بدون رد")
-                continue  # تخطى هاي الرسالة
+                continue
         result.append(msg)
     return result
-
 
 def _validate_required_fields(doc_type: str, data: Dict[str, Any]) -> List[str]:
     required = REQUIRED_FIELDS.get(doc_type, [])
@@ -309,7 +302,6 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
         }
     ]
 
-    # === التعديل الجذري هنا: زرعنا الحقول المطلوبة داخل ذاكرة المساعد عشان ما ينسى أو يهلوس ===
     prompt_instructions = "أنت مساعد قانوني أردني. مهمتك هي جمع البيانات من المستخدم لإنشاء مسودة قانونية.\n"
     prompt_instructions += "ممنوع كتابة أي قالب جاهز. اسأل سؤالاً واحداً فقط في كل رسالة، وتحدث بلهجة أردنية لطيفة.\n\n"
     prompt_instructions += "الوثائق المتاحة والحقول المطلوبة لكل منها بالترتيب:\n"
@@ -321,6 +313,7 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 1. رحب بالمستخدم واسأله عن نوع الوثيقة التي يحتاجها.
 2. بعد أن يحدد النوع، ابدأ بسؤاله عن الحقول المطلوبة الخاصة بتلك الوثيقة من القائمة أعلاه (سؤال واحد في كل مرة).
 3. بمجرد أن تجمع **جميع الحقول** للوثيقة المطلوبة، توقف فوراً عن الأسئلة، واستدعِ الأداة `generate_notary_document` ممرراً لها البيانات.
+4. عندما تستقبل نتيجة الأداة بنجاح، أعطِ المستخدم الرابط النهائي للـ PDF بصيغة ودية.
 """
 
     system_msg = {
@@ -328,19 +321,14 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
         "content": prompt_instructions
     }
 
-    # استرجاع الذاكرة إذا كانت موجودة
     history = []
     if request.previous_response_id:
         if request.previous_response_id in CONVERSATION_HISTORY:
             history = list(CONVERSATION_HISTORY[request.previous_response_id])
         else:
-            print(f"⚠️ تحذير: الذاكرة مفقودة للمعرف {request.previous_response_id}. (قد يكون السيرفر قد أعاد التشغيل)")
+            print(f"⚠️ تحذير: الذاكرة مفقودة للمعرف {request.previous_response_id}.")
 
-    # ✅ Fix: تنظيف أي tool_calls بدون رد قبل إضافة رسالة المستخدم
-    # يحل خطأ: "tool_calls must be followed by tool messages"
     history = _clean_orphan_tool_calls(history)
-
-    # إضافة رسالة المستخدم الجديدة للذاكرة
     history.append({"role": "user", "content": request.message})
 
     payload: Dict[str, Any] = {
@@ -351,36 +339,78 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=90) as client:
+            # الطلب الأول للذكاء الاصطناعي
             res = await client.post(
                 OPENAI_RESPONSES_URL,
                 headers=_openai_headers(),
                 json=payload,
             )
 
-        if res.status_code != 200:
-            print(f"RAW API ERROR: {res.text}")
-            raise HTTPException(
-                status_code=502,
-                detail=f"OpenAI error {res.status_code}: {res.text[:500]}"
-            )
+            if res.status_code != 200:
+                print(f"RAW API ERROR: {res.text}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"OpenAI error {res.status_code}: {res.text[:500]}"
+                )
+                
+            data = res.json()
             
-        data = res.json()
-        
-        # حفظ الرد الجديد في الذاكرة لتذكره في المرة القادمة
-        if "choices" in data and len(data["choices"]) > 0:
-            assistant_msg = data["choices"][0].get("message", {})
-            history.append(assistant_msg)
-            
-        new_response_id = str(uuid.uuid4())
-        CONVERSATION_HISTORY[new_response_id] = history
+            if "choices" in data and len(data["choices"]) > 0:
+                assistant_msg = data["choices"][0].get("message", {})
+                history.append(assistant_msg)
+                
+                # فحص هل الذكاء الاصطناعي طلب تنفيذ الأداة؟
+                tool_calls = assistant_msg.get("tool_calls", [])
+                if tool_calls:
+                    for tc in tool_calls:
+                        if tc.get("type") == "function" and tc["function"]["name"] == "generate_notary_document":
+                            try:
+                                raw_args = tc["function"].get("arguments", "{}")
+                                args = json.loads(raw_args)
+                                
+                                # إنشاء الـ PDF فوراً داخل السيرفر
+                                req_doc = NotaryRequest(
+                                    request_id=str(uuid.uuid4()),
+                                    doc_type=args.get("doc_type"),
+                                    data=args.get("data", {}),
+                                    witnesses=args.get("witnesses", [])
+                                )
+                                pdf_result = _generate_pdf_internal(req_doc)
+                                result_str = json.dumps(pdf_result, ensure_ascii=False)
+                            except Exception as e:
+                                result_str = json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+                            
+                            # إضافة النتيجة إلى الذاكرة وإخبار المساعد
+                            history.append({
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": result_str
+                            })
+                    
+                    # إرسال النتيجة للمساعد مرة أخرى ليصيغ الرد النهائي للمستخدم
+                    payload["messages"] = [system_msg] + history
+                    payload.pop("tool_choice", None)
+                    
+                    res2 = await client.post(
+                        OPENAI_RESPONSES_URL,
+                        headers=_openai_headers(),
+                        json=payload,
+                    )
+                    
+                    if res2.status_code == 200:
+                        data = res2.json()
+                        if "choices" in data and len(data["choices"]) > 0:
+                            history.append(data["choices"][0].get("message", {}))
 
-        # تمرير الرد للتطبيق مع الآي دي الجديد
-        parsed_response = _parse_openai_response(data)
-        parsed_response["id"] = new_response_id
-        parsed_response["response_id"] = new_response_id
-        
-        return parsed_response
+            new_response_id = str(uuid.uuid4())
+            CONVERSATION_HISTORY[new_response_id] = history
+
+            parsed_response = _parse_openai_response(data)
+            parsed_response["id"] = new_response_id
+            parsed_response["response_id"] = new_response_id
+            
+            return parsed_response
 
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="OpenAI request timed out")
@@ -392,7 +422,8 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 
 @app.post("/agent/function-result")
 async def agent_function_result(request: AgentFunctionResultRequest, auth=Depends(verify_api_key)):
-    
+    # هذا المسار بقي موجوداً في حال تم استخدامه من التطبيق مستقبلاً،
+    # ولكن الاعتماد عليه في توليد PDF لم يعد ضرورياً بفضل التعديل أعلاه.
     history = []
     if request.previous_response_id:
         if request.previous_response_id in CONVERSATION_HISTORY:
@@ -503,7 +534,6 @@ async def approve_management_draft(
         doc_type = row.get("doc_type")
         collected_fields = row.get("collected_fields") or {}
 
-        # ✅ Fix 1: Validate doc_type before Pydantic parsing to avoid cryptic 500
         valid_doc_types = list(REQUIRED_FIELDS.keys())
         if not doc_type or doc_type not in valid_doc_types:
             print(f"❌ approve error: invalid doc_type='{doc_type}' for draft {draft_id}")
@@ -512,7 +542,6 @@ async def approve_management_draft(
                 detail=f"نوع الوثيقة غير صحيح: '{doc_type}'. الأنواع المتاحة: {valid_doc_types}"
             )
 
-        # ✅ Fix 2: Validate required fields before attempting PDF generation
         missing = _validate_required_fields(doc_type, collected_fields)
         if missing:
             print(f"❌ approve error: missing fields {missing} for draft {draft_id}")
@@ -548,7 +577,6 @@ async def approve_management_draft(
     except HTTPException:
         raise
     except Exception as e:
-        # ✅ Fix 3: Log the exact error so it appears in Render logs
         import traceback
         print(f"❌ Unhandled approve error for draft {draft_id}:")
         print(traceback.format_exc())
