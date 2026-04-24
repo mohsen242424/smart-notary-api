@@ -1,89 +1,205 @@
-
 <!DOCTYPE html>
-<html dir="rtl" lang="ar">
+<html lang="ar" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <style>
-        @font-face {
-            font-family: 'Amiri';
-            src: url('font/Amiri-Regular.ttf') format('truetype');
-        }
-        body {
-            font-family: 'Amiri', serif;
-            padding: 1.5cm;
-            line-height: 1.6;
-            color: #000;
-            position: relative;
-        }
-        .header {
-            text-align: center;
-            border-bottom: 2px solid #000;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-        }
-        .variable {
-            border-bottom: 1px dotted #000;
-            padding: 0 5px;
-            font-weight: bold;
-        }
-        /* تصميم قسم الـ QR والهاش */
-        .security-section {
-            margin-top: 30px;
-            border-top: 1px solid #eee;
-            padding-top: 10px;
-            display: flex;
-            align-items: center;
-        }
-        .qr-code {
-            width: 80px;
-            height: 80px;
-            float: left; /* يظهر في أقصى اليسار */
-        }
-        .digital-hash {
-            font-size: 8pt;
-            color: #666;
-            font-family: monospace;
-            word-break: break-all;
-            margin-top: 5px;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    @font-face {
+      font-family: "Amiri";
+      src: url("fonts/Amiri-Regular.ttf") format("truetype");
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    @page {
+      size: A4;
+      margin: 20mm 15mm 20mm 15mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: "Amiri", serif;
+      font-size: 14px;
+      line-height: 1.75;
+      color: #111827;
+      margin: 0;
+      padding: 0;
+      direction: rtl;
+      text-align: right;
+    }
+
+    .page {
+      position: relative;
+      min-height: 100%;
+    }
+
+    .header {
+      text-align: center;
+      border-bottom: 2px solid #111827;
+      padding-bottom: 10px;
+      margin-bottom: 18px;
+      position: relative;
+    }
+
+    .header h2,
+    .header h3 {
+      margin: 0;
+      line-height: 1.4;
+    }
+
+    .header h2 {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .header h3 {
+      font-size: 16px;
+      color: #1f2937;
+    }
+
+    .qr-top {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 58px;
+      height: 58px;
+      object-fit: contain;
+    }
+
+    .doc-title {
+      text-align: center;
+      margin: 10px 0 14px;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .main-content {
+      margin-top: 8px;
+      word-wrap: break-word;
+    }
+
+    .variable {
+      display: inline-block;
+      min-width: 80px;
+      border-bottom: 1px dotted #6b7280;
+      padding: 0 4px;
+      font-weight: 700;
+    }
+
+    .witness-section {
+      margin-top: 22px;
+      border-top: 1px solid #d1d5db;
+      padding-top: 10px;
+    }
+
+    .witness-title {
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    table.witness-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    table.witness-table td {
+      vertical-align: top;
+      width: 50%;
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .sign-row {
+      margin-top: 30px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .sign-box {
+      width: 48%;
+      border-top: 1px dashed #6b7280;
+      padding-top: 6px;
+      min-height: 40px;
+    }
+
+    .meta-footer {
+      margin-top: 24px;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 8px;
+      font-size: 11px;
+      color: #4b5563;
+    }
+
+    .hash {
+      font-family: monospace;
+      direction: ltr;
+      text-align: left;
+      word-break: break-all;
+      margin-top: 4px;
+      font-size: 10px;
+    }
+
+    .muted {
+      color: #6b7280;
+    }
+  </style>
 </head>
 <body>
+  <div class="page">
     <div class="header">
-        <img src="{{ qr_code_path }}" class="qr-code" style="position: absolute; left: 20px; top: 20px; width: 60px;">
-        <h2>المملكة الأردنية الهاشمية</h2>
-        <h3>نظام كاتب العدل الذكي - توثيق رقمي</h3>
+      {% if qr_code_path %}
+        <img src="{{ qr_code_path }}" class="qr-top" alt="QR" />
+      {% endif %}
+      <h2>المملكة الأردنية الهاشمية</h2>
+      <h3>نظام كاتب العدل الذكي - توثيق رقمي</h3>
     </div>
- 
+
+    {% block doc_title %}
+      <div class="doc-title">وثيقة قانونية</div>
+    {% endblock %}
+
     <div class="main-content">
-        {% block content %}{% endblock %}
+      {% block content %}{% endblock %}
     </div>
- 
-    {% if witnesses %}
-    <div style="margin-top: 30px; border-top: 1px double #000; padding-top: 10px;">
-        <strong>شهود الإثبات:</strong>
-        <table style="width: 100%;">
-            <tr>
-                {% for witness in witnesses %}
-                <td style="width: 50%;">
-                    الاسم: {{ witness.full_name }}<br>
-                    الرقم الوطني: {{ witness.national_id }}<br>
-                    التوقيع: ...........................
-                </td>
-                {% endfor %}
-            </tr>
+
+    {% if witnesses and witnesses|length > 0 %}
+      <div class="witness-section">
+        <div class="witness-title">شهود الإثبات:</div>
+        <table class="witness-table">
+          <tr>
+            {% for witness in witnesses %}
+              <td>
+                <div>الاسم: {{ witness.full_name or witness.name or "—" }}</div>
+                <div>الرقم الوطني: {{ witness.national_id or "—" }}</div>
+                <div style="margin-top: 18px;">التوقيع: ....................................</div>
+              </td>
+            {% endfor %}
+          </tr>
         </table>
-    </div>
+      </div>
     {% endif %}
- 
-    <div style="margin-top: 50px; text-align: left;">
-        <p>تحريراً في: {{ date }}</p>
-        <p>توقيع صاحب العلاقة: ...........................</p>
+
+    <div class="sign-row">
+      <div class="sign-box">
+        تحريراً في: {{ date or "—" }}
+      </div>
+      <div class="sign-box">
+        توقيع صاحب العلاقة: ....................................
+      </div>
     </div>
- 
-    <div class="digital-hash">
-        بصمة التوثيق الرقمي (SHA-256): {{ ai_generated_content if ai_generated_content else 'توليد تلقائي...' }}
+
+    <div class="meta-footer">
+      <div>بصمة التوثيق الرقمي (SHA-256):</div>
+      <div class="hash">
+        {{ ai_generated_content if ai_generated_content else "N/A" }}
+      </div>
+      <div class="muted">تم إنشاء هذه الوثيقة عبر نظام كاتب العدل الذكي.</div>
     </div>
+  </div>
 </body>
 </html>
- 
