@@ -39,7 +39,7 @@ REQUIRED_FIELDS: Dict[str, List[str]] = {
         "defendant_name", "defendant_address", "subject", "claim_value", "facts"
     ],
     "lawsuit_renewal": ["court_name", "plaintiff_name", "case_number", "drop_date"],
-    "poa_special": ["user_name", "national_id", "agent_name", "poa_details"],
+    "poa_special": ["user_name", "national_id", "agent_name", "agent_national_id", "poa_details"],
     "poa_irrevocable": [
         "user_name", "national_id", "address", "phone", "agent_name", "agent_national_id",
         "land_area", "apartment_number", "plot_number", "basin_number", "basin_name", "city"
@@ -303,17 +303,22 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
         }
     ]
 
-    prompt_instructions = "أنت مساعد قانوني أردني. مهمتك هي جمع البيانات من المستخدم لإنشاء مسودة قانونية.\n"
+    prompt_instructions = "أنت مساعد قانوني أردني. مهمتك هي جمع البيانات من المستخدم لإنشاء وثيقة قانونية.\n"
     prompt_instructions += "ممنوع كتابة أي قالب جاهز. اسأل سؤالاً واحداً فقط في كل رسالة، وتحدث بلهجة أردنية لطيفة.\n\n"
-    prompt_instructions += "الوثائق المتاحة والحقول المطلوبة لكل منها بالترتيب:\n"
+    prompt_instructions += "الوثائق المتاحة والحقول المطلوبة بالأسماء الإنجليزية الدقيقة لكل منها بالترتيب:\n"
     for doc, fields in REQUIRED_FIELDS.items():
         prompt_instructions += f"- {doc}: {', '.join(fields)}\n"
-    
+
     prompt_instructions += """
+تعليمات مهمة جداً عند استدعاء الأداة:
+- يجب أن تُمرر الحقول داخل كائن data بنفس الأسماء الإنجليزية أعلاه حرفياً.
+- مثال صحيح لـ poa_special: {"user_name": "...", "national_id": "...", "agent_name": "...", "agent_national_id": "...", "poa_details": "..."}
+- لا تخترع أسماء حقول غير موجودة بالقائمة أعلاه.
+
 الخطوات التي يجب عليك اتباعها بدقة:
 1. رحب بالمستخدم واسأله عن نوع الوثيقة التي يحتاجها.
-2. بعد أن يحدد النوع، ابدأ بسؤاله عن الحقول المطلوبة الخاصة بتلك الوثيقة من القائمة أعلاه (سؤال واحد في كل مرة).
-3. بمجرد أن تجمع **جميع الحقول** للوثيقة المطلوبة، توقف فوراً عن الأسئلة، واستدعِ الأداة `generate_notary_document` ممرراً لها البيانات.
+2. بعد أن يحدد النوع، ابدأ بسؤاله عن الحقول المطلوبة الخاصة بتلك الوثيقة (سؤال واحد في كل مرة).
+3. بمجرد أن تجمع جميع الحقول، استدعِ الأداة `generate_notary_document` ممرراً البيانات بالأسماء الإنجليزية الصحيحة.
 4. عندما تستقبل نتيجة الأداة بنجاح، أعطِ المستخدم الرابط النهائي بصيغة ودية.
 """
 
