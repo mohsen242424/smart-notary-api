@@ -387,6 +387,8 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
                                     pdf_result = _generate_pdf_internal(req_doc)
                                     result_str = json.dumps(pdf_result, ensure_ascii=False)
                                 except Exception as e:
+                                    import traceback
+                                    print(f"[PDF_ERROR] doc_type={args.get('doc_type')} data={args.get('data')} error={traceback.format_exc()}")
                                     result_str = json.dumps({"status": "error", "message": f"حدث خطأ أثناء التوليد: {str(e)}"}, ensure_ascii=False)
                             else:
                                 result_str = json.dumps({"status": "error", "message": "أداة غير معروفة، يرجى التوقف وطلب البيانات المطلوبة فقط."}, ensure_ascii=False)
