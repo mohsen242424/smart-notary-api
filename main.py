@@ -18,7 +18,7 @@ app = FastAPI(title="Smart Notary Jordan API", version="2.2.5")
 
 # الإعدادات الأساسية من متغيرات البيئة
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY_HERE")
 WORKFLOW_ID = os.getenv("WORKFLOW_ID")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/chat/completions"
