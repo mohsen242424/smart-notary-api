@@ -5,7 +5,7 @@
 <h3 style="text-align: center;">لدى محكمة <span class="variable">{{ court_name }}</span> الموقرة</h3>
 
 <p><strong>المستدعي:</strong> <span class="variable">{{ plaintiff_name }}</span></p>
-<p><strong>وكيله إن وجد:</strong> <span class="variable">{{ lawyer_name }}</span></p>
+<p><strong>وكيله إن وجد:</strong> <span class="variable">{{ lawyer_name or '—' }}</span></p>
 
 <p><strong>الموضوع:</strong> طلب تجديد الدعوى الصلحية الحقوقية رقم <span class="variable">{{ case_number }}</span></p>
 

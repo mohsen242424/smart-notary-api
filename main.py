@@ -412,7 +412,10 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
                         if "choices" in data and len(data["choices"]) > 0:
                             history.append(data["choices"][0].get("message", {}))
 
-            # Persist history under stable session_id
+            # Persist history under stable session_id (cap cache at 500 entries)
+            if len(CONVERSATION_HISTORY) >= 500:
+                oldest = next(iter(CONVERSATION_HISTORY))
+                del CONVERSATION_HISTORY[oldest]
             CONVERSATION_HISTORY[session_id] = history
             save_session_history(session_id, history)
 
@@ -481,6 +484,9 @@ async def agent_function_result(request: AgentFunctionResultRequest, auth=Depend
             assistant_msg = data["choices"][0].get("message", {})
             history.append(assistant_msg)
 
+        if len(CONVERSATION_HISTORY) >= 500:
+            oldest = next(iter(CONVERSATION_HISTORY))
+            del CONVERSATION_HISTORY[oldest]
         CONVERSATION_HISTORY[session_id] = history
         save_session_history(session_id, history)
 
