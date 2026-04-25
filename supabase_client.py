@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
 from supabase import create_client, Client
@@ -135,3 +136,38 @@ def create_notary_document(payload: Dict[str, Any]) -> Dict[str, Any]:
         return response.data[0]
     except Exception as e:
         raise RuntimeError(f"فشل إنشاء المسودة: {e}")
+
+
+# ---------------------------
+# Session history (conversation memory)
+# ---------------------------
+
+def get_session_history(session_id: str) -> List[Dict[str, Any]]:
+    """Fetch conversation history for a session from Supabase."""
+    try:
+        supabase = _get_client()
+        response = (
+            supabase.table("conversation_sessions")
+            .select("history")
+            .eq("id", session_id)
+            .limit(1)
+            .execute()
+        )
+        if response.data:
+            return response.data[0].get("history") or []
+        return []
+    except Exception:
+        return []
+
+
+def save_session_history(session_id: str, history: List[Dict[str, Any]]) -> None:
+    """Upsert conversation history for a session into Supabase."""
+    try:
+        supabase = _get_client()
+        supabase.table("conversation_sessions").upsert({
+            "id": session_id,
+            "history": history,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception:
+        pass

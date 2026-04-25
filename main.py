@@ -59,6 +59,7 @@ class NotaryRequest(BaseModel):
 
 class AgentMessageRequest(BaseModel):
     message: str
+    session_id: Optional[str] = None
     workflow_id: Optional[str] = None
     workflow_version: Optional[str] = None
     previous_response_id: Optional[str] = None
@@ -66,6 +67,7 @@ class AgentMessageRequest(BaseModel):
 class AgentFunctionResultRequest(BaseModel):
     call_id: str
     result: str
+    session_id: Optional[str] = None
     workflow_id: Optional[str] = None
     workflow_version: Optional[str] = None
     previous_response_id: Optional[str] = None
@@ -320,8 +322,22 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
         "content": prompt_instructions
     }
 
-    history = []
-    if request.previous_response_id:
+    from supabase_client import get_session_history, save_session_history
+
+    # Resolve session_id: use provided one, or create a new one
+    session_id = request.session_id or str(uuid.uuid4())
+
+    # Load history: in-memory cache first, then Supabase
+    history: List[Dict[str, Any]] = []
+    if request.session_id:
+        if request.session_id in CONVERSATION_HISTORY:
+            history = list(CONVERSATION_HISTORY[request.session_id])
+        else:
+            history = get_session_history(request.session_id)
+            if history:
+                CONVERSATION_HISTORY[request.session_id] = history
+    elif request.previous_response_id:
+        # Backward compatibility
         if request.previous_response_id in CONVERSATION_HISTORY:
             history = list(CONVERSATION_HISTORY[request.previous_response_id])
 
@@ -345,13 +361,13 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 
             if res.status_code != 200:
                 raise HTTPException(status_code=502, detail=f"OpenAI error: {res.text[:500]}")
-                
+
             data = res.json()
-            
+
             if "choices" in data and len(data["choices"]) > 0:
                 assistant_msg = data["choices"][0].get("message", {})
                 history.append(assistant_msg)
-                
+
                 tool_calls = assistant_msg.get("tool_calls", [])
                 if tool_calls:
                     for tc in tool_calls:
@@ -361,7 +377,7 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
                                 try:
                                     raw_args = tc["function"].get("arguments", "{}")
                                     args = json.loads(raw_args)
-                                    
+
                                     req_doc = NotaryRequest(
                                         request_id=str(uuid.uuid4()),
                                         doc_type=args.get("doc_type"),
@@ -374,35 +390,37 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
                                     result_str = json.dumps({"status": "error", "message": f"حدث خطأ أثناء التوليد: {str(e)}"}, ensure_ascii=False)
                             else:
                                 result_str = json.dumps({"status": "error", "message": "أداة غير معروفة، يرجى التوقف وطلب البيانات المطلوبة فقط."}, ensure_ascii=False)
-                        
+
                         # ضمان إرسال رد الأداة لمنع خطأ 502 من أوبن أيه آي
                         history.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
                             "content": result_str
                         })
-                    
+
                     payload["messages"] = [system_msg] + history
                     payload.pop("tool_choice", None)
-                    
+
                     res2 = await client.post(
                         OPENAI_RESPONSES_URL,
                         headers=_openai_headers(),
                         json=payload,
                     )
-                    
+
                     if res2.status_code == 200:
                         data = res2.json()
                         if "choices" in data and len(data["choices"]) > 0:
                             history.append(data["choices"][0].get("message", {}))
 
-            new_response_id = str(uuid.uuid4())
-            CONVERSATION_HISTORY[new_response_id] = history
+            # Persist history under stable session_id
+            CONVERSATION_HISTORY[session_id] = history
+            save_session_history(session_id, history)
 
             parsed_response = _parse_openai_response(data)
-            parsed_response["id"] = new_response_id
-            parsed_response["response_id"] = new_response_id
-            
+            parsed_response["id"] = session_id
+            parsed_response["response_id"] = session_id
+            parsed_response["session_id"] = session_id
+
             return parsed_response
 
     except httpx.TimeoutException:
@@ -412,8 +430,19 @@ async def agent_message(request: AgentMessageRequest, auth=Depends(verify_api_ke
 
 @app.post("/agent/function-result")
 async def agent_function_result(request: AgentFunctionResultRequest, auth=Depends(verify_api_key)):
-    history = []
-    if request.previous_response_id:
+    from supabase_client import get_session_history, save_session_history
+
+    session_id = request.session_id or str(uuid.uuid4())
+
+    history: List[Dict[str, Any]] = []
+    if request.session_id:
+        if request.session_id in CONVERSATION_HISTORY:
+            history = list(CONVERSATION_HISTORY[request.session_id])
+        else:
+            history = get_session_history(request.session_id)
+            if history:
+                CONVERSATION_HISTORY[request.session_id] = history
+    elif request.previous_response_id:
         if request.previous_response_id in CONVERSATION_HISTORY:
             history = list(CONVERSATION_HISTORY[request.previous_response_id])
 
@@ -451,14 +480,15 @@ async def agent_function_result(request: AgentFunctionResultRequest, auth=Depend
         if "choices" in data and len(data["choices"]) > 0:
             assistant_msg = data["choices"][0].get("message", {})
             history.append(assistant_msg)
-            
-        new_response_id = str(uuid.uuid4())
-        CONVERSATION_HISTORY[new_response_id] = history
+
+        CONVERSATION_HISTORY[session_id] = history
+        save_session_history(session_id, history)
 
         parsed_response = _parse_openai_response(data)
-        parsed_response["id"] = new_response_id
-        parsed_response["response_id"] = new_response_id
-        
+        parsed_response["id"] = session_id
+        parsed_response["response_id"] = session_id
+        parsed_response["session_id"] = session_id
+
         return parsed_response
 
     except httpx.TimeoutException:
