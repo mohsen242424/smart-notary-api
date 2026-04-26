@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from dotenv import load_dotenv
 
 load_dotenv()
-app = FastAPI(title="Smart Notary Jordan API", version="2.3.3")
+app = FastAPI(title="Smart Notary Jordan API", version="2.3.1")
 
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_HERE")
@@ -35,29 +35,19 @@ def _generate_pdf_internal(doc_type: str, data: Dict[str, Any], req_id: str):
     
     missing = [f for f in REQUIRED_FIELDS.get(doc_type, []) if not data.get(f)]
     if missing:
-        return {"status": "error", "message": f"الحقول ناقصة: {', '.join(missing)}"}
+        # بدلاً من رمي Exception يوقف السيرفر، سنرجع رسالة خطأ واضحة للمساعد
+        return {"status": "error", "message": f"الحقول التالية ناقصة في الطلب: {', '.join(missing)}"}
     
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
-        
-        # إضافة بصمة التوثيق الرقمي
-        data_string = json.dumps(data, sort_keys=True)
-        doc_hash = hashlib.sha256(data_string.encode()).hexdigest()
-        
-        template_data = {
-            **data, 
-            "date": Date.today().strftime("%Y/%m/%d"), 
-            "ai_generated_content": doc_hash,
-            "witnesses": data.get("witnesses", [])
-        }
-        
+        template_data = {**data, "date": Date.today().strftime("%Y/%m/%d"), "witnesses": data.get("witnesses", [])}
         generate_pdf(f"{doc_type}.html", template_data, tmp_path)
         pdf_url = upload_pdf_to_storage(tmp_path, f"{req_id}.pdf")
         return {"status": "success", "pdf_url": pdf_url}
     except Exception as e:
-        print(f"❌ PDF ERROR: {traceback.format_exc()}")
+        print(f"❌ PDF GEN ERROR: {traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
     finally:
         if tmp_path and os.path.exists(tmp_path): os.remove(tmp_path)
@@ -67,23 +57,21 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
     from supabase_client import get_session_history, save_session_history
     session_id = request.session_id or str(uuid.uuid4())
     
-    # تحسين الـ Prompt ليوازن بين الأسئلة وبين التوليد الفوري
-    system_prompt = f"""أنت مساعد قانوني أردني.
-1. إذا كانت المعلومات كاملة: استدعِ 'generate_notary_document' فوراً وقم بتحويل 'poa_details' إلى نص قانوني رصين (Legalese).
-2. إذا كانت المعلومات ناقصة: اسأل عن معلومة واحدة فقط بالترتيب لجمعها.
-3. لا تعتذر عن صنع الملفات، استخدم الأداة المتاحة لك.
-الحقول المطلوبة: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
-
+    # تحسين الـ Prompt لإجبار الـ AI على سحب البيانات من تاريخ المحادثة
+    system_prompt = f"""أنت مساعد قانوني أردني ذكي. 
+مهمتك استخراج البيانات (الاسم، الرقم الوطني، إلخ) من الدردشة ووضعها في حقل 'data' عند استدعاء الأداة.
+ممنوع إرسال حقول فارغة. الحقول المطلوبة لكل نوع: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
+    
     tools = [{
         "type": "function", 
         "function": {
             "name": "generate_notary_document", 
-            "description": "توليد الوثيقة النهائية بصيغة PDF.", 
+            "description": "توليد ملف PDF القانوني بناءً على البيانات المجموعة.", 
             "parameters": {
                 "type": "object", 
                 "properties": {
                     "doc_type": {"type": "string", "enum": list(REQUIRED_FIELDS.keys())}, 
-                    "data": {"type": "object", "description": "يجب أن تكون النصوص هنا مصاغة قانونياً وبألفاظ رسمية أردنية"}
+                    "data": {"type": "object", "description": "يجب ملء جميع الحقول المطلوبة هنا"}
                 }, 
                 "required": ["doc_type", "data"]
             }
@@ -97,7 +85,7 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
         res = await client.post(
             OPENAI_RESPONSES_URL, 
             headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}, 
-            json={"model": OPENAI_MODEL, "messages": [{"role": "system", "content": system_prompt}] + history, "tools": tools, "tool_choice": "auto"}
+            json={"model": OPENAI_MODEL, "messages": [{"role": "system", "content": system_prompt}] + history, "tools": tools}
         )
         
         data = res.json()
@@ -108,23 +96,23 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
             for tc in msg["tool_calls"]:
                 args = json.loads(tc["function"]["arguments"])
                 doc_type = args.get("doc_type")
+                # معالجة مرنة للبيانات
                 doc_data = args.get("data") if args.get("data") else {k: v for k, v in args.items() if k != "doc_type"}
+                
+                # سطر للتشخيص في Render Logs
+                print(f"DEBUG: AI calling tool for {doc_type} with data: {doc_data}")
                 
                 res_tool = _generate_pdf_internal(doc_type, doc_data, str(uuid.uuid4()))
                 history.append({"role": "tool", "tool_call_id": tc["id"], "content": json.dumps(res_tool)})
             
+            # الحصول على الرد النهائي بعد تنفيذ الأداة
             final_res = await client.post(OPENAI_RESPONSES_URL, headers={"Authorization": f"Bearer {OPENAI_KEY}"}, json={"model": OPENAI_MODEL, "messages": history})
             msg = final_res.json()["choices"][0]["message"]
 
     history.append(msg)
     save_session_history(session_id, history)
-    
-    # إرجاع رد كامل متوافق مع الواجهة
-    return {
-        "id": session_id,
-        "response_id": session_id,
-        "text": msg.get("content", "") or "جاري معالجة طلبك..."
-    }
+    return {"id": session_id, "response_id": session_id, "text": msg.get("content", "")}
 
 @app.get("/")
-async def health(): return {"status": "ok", "version": "2.3.3"}
+async def health(): return {"status": "ok", "version": "2.3.1"}
+    
