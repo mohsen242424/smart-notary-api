@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from dotenv import load_dotenv
 
 load_dotenv()
-app = FastAPI(title="Smart Notary Jordan API", version="2.3.2")
+app = FastAPI(title="Smart Notary Jordan API", version="2.3.3")
 
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_HERE")
@@ -42,7 +42,7 @@ def _generate_pdf_internal(doc_type: str, data: Dict[str, Any], req_id: str):
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
         
-        # إضافة بصمة SHA-256 للتوثيق الرقمي
+        # إضافة بصمة التوثيق الرقمي
         data_string = json.dumps(data, sort_keys=True)
         doc_hash = hashlib.sha256(data_string.encode()).hexdigest()
         
@@ -67,27 +67,23 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
     from supabase_client import get_session_history, save_session_history
     session_id = request.session_id or str(uuid.uuid4())
     
-    # --- تطوير الـ System Prompt ليكون قانونياً وتدريجياً ---
-    system_prompt = f"""أنت كاتب عدل ومحامي أردني خبير. 
-هدفك جمع البيانات لصياغة وثائق قانونية رسمية.
-قواعد الحوار:
-1. اسأل عن معلومة واحدة فقط في كل مرة وبأسلوب لبق (مثلاً: "تفضل بإعطائي اسمك الرباعي الكريم").
-2. لا تنتقل للسؤال التالي إلا بعد استلام رد كافٍ.
-3. **التطوير القانوني**: عندما يخبرك المستخدم بهدف الوكالة (مثلاً: بيع أرض)، قم فوراً بتحويلها إلى نص قانوني أردني رصين (Legalese). 
-مثال: "بيع سيارة" تتحول إلى "بيع وفراغ والتنازل عن المركبة وقبض الثمن والتوقيع أمام الدوائر المختصة".
-4. استخدم مصطلحات مثل: "أقر وأعترف"، "وكالة مفوضة لقوله ورأيه"، "لا يجهل تجهيلاً شرعياً".
-5. لا تستدعي 'generate_notary_document' إلا بعد اكتمال جميع الحقول: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
+    # تحسين الـ Prompt ليوازن بين الأسئلة وبين التوليد الفوري
+    system_prompt = f"""أنت مساعد قانوني أردني.
+1. إذا كانت المعلومات كاملة: استدعِ 'generate_notary_document' فوراً وقم بتحويل 'poa_details' إلى نص قانوني رصين (Legalese).
+2. إذا كانت المعلومات ناقصة: اسأل عن معلومة واحدة فقط بالترتيب لجمعها.
+3. لا تعتذر عن صنع الملفات، استخدم الأداة المتاحة لك.
+الحقول المطلوبة: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
 
     tools = [{
         "type": "function", 
         "function": {
             "name": "generate_notary_document", 
-            "description": "توليد الوثيقة النهائية بصيغة PDF بعد الصياغة القانونية.", 
+            "description": "توليد الوثيقة النهائية بصيغة PDF.", 
             "parameters": {
                 "type": "object", 
                 "properties": {
                     "doc_type": {"type": "string", "enum": list(REQUIRED_FIELDS.keys())}, 
-                    "data": {"type": "object", "description": "يجب أن تكون نصوص الوكالة هنا مصاغة قانونياً بأسلوب المحامين"}
+                    "data": {"type": "object", "description": "يجب أن تكون النصوص هنا مصاغة قانونياً وبألفاظ رسمية أردنية"}
                 }, 
                 "required": ["doc_type", "data"]
             }
@@ -101,7 +97,7 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
         res = await client.post(
             OPENAI_RESPONSES_URL, 
             headers={"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}, 
-            json={"model": OPENAI_MODEL, "messages": [{"role": "system", "content": system_prompt}] + history, "tools": tools}
+            json={"model": OPENAI_MODEL, "messages": [{"role": "system", "content": system_prompt}] + history, "tools": tools, "tool_choice": "auto"}
         )
         
         data = res.json()
@@ -122,7 +118,13 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
 
     history.append(msg)
     save_session_history(session_id, history)
-    return {"id": session_id, "response_id": session_id, "text": msg.get("content", "")}
+    
+    # إرجاع رد كامل متوافق مع الواجهة
+    return {
+        "id": session_id,
+        "response_id": session_id,
+        "text": msg.get("content", "") or "جاري معالجة طلبك..."
+    }
 
 @app.get("/")
-async def health(): return {"status": "ok", "version": "2.3.2"}
+async def health(): return {"status": "ok", "version": "2.3.3"}
