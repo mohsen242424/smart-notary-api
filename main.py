@@ -60,7 +60,7 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
     # تحسين الـ Prompt لإجبار الـ AI على سحب البيانات من تاريخ المحادثة
     system_prompt = f"""أنت مساعد قانوني أردني ذكي. 
 مهمتك استخراج البيانات (الاسم، الرقم الوطني، إلخ) من الدردشة ووضعها في حقل 'data' عند استدعاء الأداة.
-ممنوع إرسال حقول فارغة. الحقول المطلوبة لكل نوع: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
+ممنوع إرسال حقول فارغة. الحقول المطلوبة لكل نوع: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}  والمعلومات اللي ممكن تكتبها بحشو كلام قانوني زي مثلا تفاصيل الوكالة ف اكتب نفس اللي كتبة المستخدم بس بحشو قانوني وتوضيحات قانونية اكثر."""
     
     tools = [{
         "type": "function", 
