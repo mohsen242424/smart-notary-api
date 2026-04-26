@@ -35,8 +35,8 @@ def _generate_pdf_internal(doc_type: str, data: Dict[str, Any], req_id: str):
     
     missing = [f for f in REQUIRED_FIELDS.get(doc_type, []) if not data.get(f)]
     if missing:
-        # بدلاً من رمي Exception يوقف السيرفر، سنرجع رسالة خطأ واضحة
-        return {"status": "error", "message": f"الحقول التالية ناقصة: {', '.join(missing)}"}
+        # بدلاً من رمي Exception يوقف السيرفر، سنرجع رسالة خطأ واضحة للمساعد
+        return {"status": "error", "message": f"الحقول التالية ناقصة في الطلب: {', '.join(missing)}"}
     
     tmp_path = None
     try:
@@ -57,22 +57,21 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
     from supabase_client import get_session_history, save_session_history
     session_id = request.session_id or str(uuid.uuid4())
     
-    # تحسين الـ Prompt لإجبار الـ AI على ملء الحقول من الذاكرة
-    system_prompt = f"""أنت كاتب عدل أردني آلي. 
-عند استدعاء 'generate_notary_document'، يجب عليك استخراج القيم (مثل الاسم والرقم الوطني) من تاريخ المحادثة ووضعها في حقل 'data'.
-ممنوع إرسال حقول فارغة إذا كانت المعلومات موجودة في الدردشة السابقة.
-الحقول المطلوبة: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
+    # تحسين الـ Prompt لإجبار الـ AI على سحب البيانات من تاريخ المحادثة
+    system_prompt = f"""أنت مساعد قانوني أردني ذكي. 
+مهمتك استخراج البيانات (الاسم، الرقم الوطني، إلخ) من الدردشة ووضعها في حقل 'data' عند استدعاء الأداة.
+ممنوع إرسال حقول فارغة. الحقول المطلوبة لكل نوع: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
     
     tools = [{
         "type": "function", 
         "function": {
             "name": "generate_notary_document", 
-            "description": "توليد ملف PDF القانوني بناءً على البيانات التي تم جمعها.", 
+            "description": "توليد ملف PDF القانوني بناءً على البيانات المجموعة.", 
             "parameters": {
                 "type": "object", 
                 "properties": {
                     "doc_type": {"type": "string", "enum": list(REQUIRED_FIELDS.keys())}, 
-                    "data": {"type": "object"}
+                    "data": {"type": "object", "description": "يجب ملء جميع الحقول المطلوبة هنا"}
                 }, 
                 "required": ["doc_type", "data"]
             }
@@ -97,15 +96,16 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
             for tc in msg["tool_calls"]:
                 args = json.loads(tc["function"]["arguments"])
                 doc_type = args.get("doc_type")
+                # معالجة مرنة للبيانات
                 doc_data = args.get("data") if args.get("data") else {k: v for k, v in args.items() if k != "doc_type"}
                 
-                # طباعة البيانات للتشخيص في Render Logs
+                # سطر للتشخيص في Render Logs
                 print(f"DEBUG: AI calling tool for {doc_type} with data: {doc_data}")
                 
                 res_tool = _generate_pdf_internal(doc_type, doc_data, str(uuid.uuid4()))
                 history.append({"role": "tool", "tool_call_id": tc["id"], "content": json.dumps(res_tool)})
             
-            # الحصول على الرد النهائي
+            # الحصول على الرد النهائي بعد تنفيذ الأداة
             final_res = await client.post(OPENAI_RESPONSES_URL, headers={"Authorization": f"Bearer {OPENAI_KEY}"}, json={"model": OPENAI_MODEL, "messages": history})
             msg = final_res.json()["choices"][0]["message"]
 
@@ -115,3 +115,4 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
 
 @app.get("/")
 async def health(): return {"status": "ok", "version": "2.3.1"}
+    
