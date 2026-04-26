@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from dotenv import load_dotenv
 
 load_dotenv()
-app = FastAPI(title="Smart Notary Jordan API", version="2.3.1")
+app = FastAPI(title="Smart Notary Jordan API", version="2.3.2")
 
 API_KEY = os.getenv("API_KEY") or os.getenv("API_key")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY_HERE")
@@ -35,19 +35,29 @@ def _generate_pdf_internal(doc_type: str, data: Dict[str, Any], req_id: str):
     
     missing = [f for f in REQUIRED_FIELDS.get(doc_type, []) if not data.get(f)]
     if missing:
-        # بدلاً من رمي Exception يوقف السيرفر، سنرجع رسالة خطأ واضحة للمساعد
-        return {"status": "error", "message": f"الحقول التالية ناقصة في الطلب: {', '.join(missing)}"}
+        return {"status": "error", "message": f"الحقول ناقصة: {', '.join(missing)}"}
     
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
-        template_data = {**data, "date": Date.today().strftime("%Y/%m/%d"), "witnesses": data.get("witnesses", [])}
+        
+        # إضافة بصمة SHA-256 للتوثيق الرقمي
+        data_string = json.dumps(data, sort_keys=True)
+        doc_hash = hashlib.sha256(data_string.encode()).hexdigest()
+        
+        template_data = {
+            **data, 
+            "date": Date.today().strftime("%Y/%m/%d"), 
+            "ai_generated_content": doc_hash,
+            "witnesses": data.get("witnesses", [])
+        }
+        
         generate_pdf(f"{doc_type}.html", template_data, tmp_path)
         pdf_url = upload_pdf_to_storage(tmp_path, f"{req_id}.pdf")
         return {"status": "success", "pdf_url": pdf_url}
     except Exception as e:
-        print(f"❌ PDF GEN ERROR: {traceback.format_exc()}")
+        print(f"❌ PDF ERROR: {traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
     finally:
         if tmp_path and os.path.exists(tmp_path): os.remove(tmp_path)
@@ -57,21 +67,27 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
     from supabase_client import get_session_history, save_session_history
     session_id = request.session_id or str(uuid.uuid4())
     
-    # تحسين الـ Prompt لإجبار الـ AI على سحب البيانات من تاريخ المحادثة
-    system_prompt = f"""أنت مساعد قانوني أردني ذكي. 
-مهمتك استخراج البيانات (الاسم، الرقم الوطني، إلخ) من الدردشة ووضعها في حقل 'data' عند استدعاء الأداة.
-ممنوع إرسال حقول فارغة. الحقول المطلوبة لكل نوع: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
-    
+    # --- تطوير الـ System Prompt ليكون قانونياً وتدريجياً ---
+    system_prompt = f"""أنت كاتب عدل ومحامي أردني خبير. 
+هدفك جمع البيانات لصياغة وثائق قانونية رسمية.
+قواعد الحوار:
+1. اسأل عن معلومة واحدة فقط في كل مرة وبأسلوب لبق (مثلاً: "تفضل بإعطائي اسمك الرباعي الكريم").
+2. لا تنتقل للسؤال التالي إلا بعد استلام رد كافٍ.
+3. **التطوير القانوني**: عندما يخبرك المستخدم بهدف الوكالة (مثلاً: بيع أرض)، قم فوراً بتحويلها إلى نص قانوني أردني رصين (Legalese). 
+مثال: "بيع سيارة" تتحول إلى "بيع وفراغ والتنازل عن المركبة وقبض الثمن والتوقيع أمام الدوائر المختصة".
+4. استخدم مصطلحات مثل: "أقر وأعترف"، "وكالة مفوضة لقوله ورأيه"، "لا يجهل تجهيلاً شرعياً".
+5. لا تستدعي 'generate_notary_document' إلا بعد اكتمال جميع الحقول: {json.dumps(REQUIRED_FIELDS, ensure_ascii=False)}."""
+
     tools = [{
         "type": "function", 
         "function": {
             "name": "generate_notary_document", 
-            "description": "توليد ملف PDF القانوني بناءً على البيانات المجموعة.", 
+            "description": "توليد الوثيقة النهائية بصيغة PDF بعد الصياغة القانونية.", 
             "parameters": {
                 "type": "object", 
                 "properties": {
                     "doc_type": {"type": "string", "enum": list(REQUIRED_FIELDS.keys())}, 
-                    "data": {"type": "object", "description": "يجب ملء جميع الحقول المطلوبة هنا"}
+                    "data": {"type": "object", "description": "يجب أن تكون نصوص الوكالة هنا مصاغة قانونياً بأسلوب المحامين"}
                 }, 
                 "required": ["doc_type", "data"]
             }
@@ -96,16 +112,11 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
             for tc in msg["tool_calls"]:
                 args = json.loads(tc["function"]["arguments"])
                 doc_type = args.get("doc_type")
-                # معالجة مرنة للبيانات
                 doc_data = args.get("data") if args.get("data") else {k: v for k, v in args.items() if k != "doc_type"}
-                
-                # سطر للتشخيص في Render Logs
-                print(f"DEBUG: AI calling tool for {doc_type} with data: {doc_data}")
                 
                 res_tool = _generate_pdf_internal(doc_type, doc_data, str(uuid.uuid4()))
                 history.append({"role": "tool", "tool_call_id": tc["id"], "content": json.dumps(res_tool)})
             
-            # الحصول على الرد النهائي بعد تنفيذ الأداة
             final_res = await client.post(OPENAI_RESPONSES_URL, headers={"Authorization": f"Bearer {OPENAI_KEY}"}, json={"model": OPENAI_MODEL, "messages": history})
             msg = final_res.json()["choices"][0]["message"]
 
@@ -114,5 +125,4 @@ async def agent_message(request: AgentMessageRequest, auth: str = Depends(verify
     return {"id": session_id, "response_id": session_id, "text": msg.get("content", "")}
 
 @app.get("/")
-async def health(): return {"status": "ok", "version": "2.3.1"}
-    
+async def health(): return {"status": "ok", "version": "2.3.2"}
