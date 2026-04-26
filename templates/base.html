@@ -6,7 +6,8 @@
   <style>
     @font-face {
       font-family: "Amiri";
-      src: url("font/Amiri-Regular.ttf") format("truetype");
+      /* تعديل المسار ليكون في الجذر مباشرة */
+      src: url("Amiri-Regular.ttf") format("truetype");
       font-weight: 400;
       font-style: normal;
     }
@@ -58,15 +59,6 @@
     .header h3 {
       font-size: 16px;
       color: #1f2937;
-    }
-
-    .qr-top {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 58px;
-      height: 58px;
-      object-fit: contain;
     }
 
     .doc-title {
@@ -152,9 +144,6 @@
 <body>
   <div class="page">
     <div class="header">
-      {% if qr_code_path %}
-        <img src="{{ qr_code_path }}" class="qr-top" alt="QR" />
-      {% endif %}
       <h2>المملكة الأردنية الهاشمية</h2>
       <h3>نظام كاتب العدل الذكي - توثيق رقمي</h3>
     </div>
@@ -176,8 +165,7 @@
               <td>
                 <div>الاسم: {{ witness.full_name or witness.name or "—" }}</div>
                 <div>الرقم الوطني: {{ witness.national_id or "—" }}</div>
-                <div style="margin-top: 18px;">التوقيع: ....................................</div>
-              </td>
+                </td>
             {% endfor %}
           </tr>
         </table>
@@ -188,10 +176,7 @@
       <div class="sign-box">
         تحريراً في: {{ date or "—" }}
       </div>
-      <div class="sign-box">
-        توقيع صاحب العلاقة: ....................................
       </div>
-    </div>
 
     <div class="meta-footer">
       <div>بصمة التوثيق الرقمي (SHA-256):</div>
